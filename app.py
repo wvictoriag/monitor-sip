@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
+import time
 
 # Configuración de la página
 st.set_page_config(page_title="Monitor de Licitaciones SIP Energy", page_icon="⚡", layout="wide")
@@ -35,25 +36,35 @@ def fetch_licitaciones(ticket):
     today = datetime.now()
     dates = [(today - timedelta(days=i)).strftime("%d%m%Y") for i in range(3)]
     
-    # Encabezados para evitar bloqueos del servidor
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    }
+    # Session para reutilizar la conexión y headers de navegador moderno
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json"
+    })
     
-    with st.spinner('Consultando API de Mercado Público...'):
+    with st.spinner('Consultando API de Mercado Público (esto puede tardar por los reintentos)...'):
         for date in dates:
-            # Usamos HTTPS para mayor seguridad y compatibilidad
-            url = f"https://api.mercadopublico.cl/servicios/v1/publico/licitaciones.json?fecha={date}&ticket={ticket}"
-            try:
-                response = requests.get(url, headers=headers, timeout=15)
-                if response.status_code == 200:
-                    data = response.json()
-                    if "Listado" in data and data["Listado"]:
-                        results.extend(data["Listado"])
-                elif response.status_code == 401:
-                    st.error(f"Ticket API inválido para la fecha {date}.")
-            except Exception as e:
-                st.error(f"Aviso ({date}): El servidor de Mercado Público está saturado. Reintenta en un momento.")
+            for attempt in range(3): # Reintentar hasta 3 veces
+                url = f"http://api.mercadopublico.cl/servicios/v1/publico/licitaciones.json?fecha={date}&ticket={ticket}"
+                try:
+                    response = session.get(url, timeout=25)
+                    if response.status_code == 200:
+                        data = response.json()
+                        if "Listado" in data and data["Listado"]:
+                            results.extend(data["Listado"])
+                        break # Éxito: saltar al siguiente día
+                    elif response.status_code == 401:
+                        st.error(f"Ticket API inválido para la fecha {date}.")
+                        break
+                except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+                    if attempt < 2:
+                        time.sleep(3) # Esperar antes de reintentar
+                        continue
+                except Exception:
+                    break
+            
+            time.sleep(1) # Pausa de cortesía entre días
     
     return results
 
@@ -90,7 +101,7 @@ if filtered_tenders:
     )
     st.success("✅ Datos actualizados correctamente.")
 else:
-    st.info("No se encontraron licitaciones nuevas en los últimos 3 días.")
+    st.info("No se encontraron licitaciones nuevas en los últimos 3 días. Por favor, revisa tu Ticket API si crees que es un error.")
 
 st.markdown("---")
 st.caption("Desarrollado para SIP Energy - Mercado Público Chile")
